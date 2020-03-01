@@ -6,7 +6,7 @@ import igraph as ig
 
 
 
-class Data(object):
+class FlowData(object):
 
     _password = 'Hu57ta59!'
     _username = 'postgres'
@@ -60,6 +60,6 @@ class Data(object):
         
         
 def test():
-    taxi = Data(table_name='aggregated_taxi', path='/home/sebastijan/project/gwcd/data')
+    taxi = FlowData(table_name='aggregated_taxi', path='/home/sebastijan/project/gwcd/data')
     taxi.get_data(geom_col = "flow")
     taxi.save_geom()
