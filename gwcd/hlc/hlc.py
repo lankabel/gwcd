@@ -160,6 +160,7 @@ class EdgeClustering(object):
 
         # Merge the smaller cluster into the larger one
         for edge in cl2.edges:
+            # pylint: disable=unsupported-assignment-operation
             self.membership[edge] = cid1
         cl1.merge_from(cl2)
         self.clusters[cid2] = cl1
