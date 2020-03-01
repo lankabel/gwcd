@@ -3,7 +3,7 @@ import pathlib as pathlib
 import geopandas as gpd
 import sqlalchemy as db 
 import igraph as ig
-
+import math
 
 
 class FlowData(object):
@@ -22,7 +22,7 @@ class FlowData(object):
     _con = _engine.connect()
     # engine.table_names()
     
-    def get_data(self, overwrite=False, geom_col = "geom"):
+    def get_data(self, overwrite=False, geom_col = "geom", limit=0):
         '''
         Gets the data from the database and stores it as GeoPandas DataFrame
         '''
@@ -34,7 +34,10 @@ class FlowData(object):
             print(f'''Data loaded from: {self._path}/{self.table_name}.gpkg''')
         else:     
             table = db.Table(self.table_name, self._metadata, autoload=True, autoload_with=self._engine)
-            query = table.select()
+            if limit:
+                query = table.select().limit(limit)
+            else:                
+                query = table.select()
             # query_result = self._con.execute(query)
             # query_result_set = query_result.fetchall()
             
@@ -65,7 +68,7 @@ class FlowData(object):
         self.data_cleaned = self.data[self.data[length_row_name]>0].copy()
         
         def distance_function(distance:gpd.GeoSeries):   
-                return 1./distance
+                return 1./(distance.apply)(lambda x: pow(x,2))
         
         
         self.data_cleaned['distance_function'] = distance_function(self.data_cleaned[length_row_name])   
@@ -75,8 +78,12 @@ class FlowData(object):
             print(f'''File exists on path: {full_path} . To overwrite use overwrite=True flag.\nLoading graph from file.''')
             pass
         else:
+            # self.data_cleaned['weight'] = self.data_cleaned[count_row_name]
             self.data_cleaned['weight'] = self.data_cleaned[count_row_name] * self.data_cleaned['distance_function']
+            
             self.graph = ig.Graph.TupleList(self.data_cleaned.itertuples(index=False), directed=True, edge_attrs="weight")
+            for item in list(self.data):
+                self.graph.es[item] = self.data[item]
             print(f'''Created graph in memory. Use FlowData.save_graph() to save it to file.''')
         
         
@@ -95,9 +102,10 @@ class FlowData(object):
             print(f'''File saved on path: {full_path}''')
         
         
-taxi = FlowData(table_name='aggregated_taxi', path='/home/sebastijan/project/gwcd/data')
-taxi.get_data(geom_col = "flow")
-taxi.save_geom()
-taxi.make_graph(length_row_name='trip_length_km')
-taxi.save_graph()
+# taxi = FlowData(table_name='aggregated_taxi', path='/home/sebastijan/project/gwcd/data')
+# taxi.get_data(geom_col = "flow")
+# taxi.save_geom()
+# taxi.make_graph(length_row_name='trip_length_km')
+# taxi.save_graph()
+
 

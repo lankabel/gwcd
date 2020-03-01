@@ -13,9 +13,10 @@ hope so. Also, it handles all the input graph formats that igraph_ handles.
 
 .. _igraph: http://igraph.sourceforge.net
 """
-
+import time
 import pandas as pd
 import numpy as np
+import multiprocessing.dummy as mp
 
 from array import array
 from collections import defaultdict
@@ -29,6 +30,8 @@ from textwrap import dedent
 import logging
 import os
 import sys
+from tqdm import tqdm
+import itertools
 
 __author__ = "Tamas Nepusz"
 __license__ = "MIT"
@@ -43,31 +46,33 @@ class TanimotoSimilarityCalculator(object):
     average weight of edges adjacent to the vertex."""
 
     def __init__(self, graph, attr="weight"):
-        degrees = graph.degree()
-        strengths = graph.strength(weights=attr)
-        weights = graph.es[attr]
+        degrees = np.array(graph.degree())
+        strengths = np.array(graph.strength(weights=attr))
+        weights = np.array(graph.es[attr])
+        
 
         self._adjedgelist = []
         get_eid = graph.get_eid  # prelookup
 
-        for i in  range(graph.vcount()):
+        print('Calculating strengths')
+        for i in  tqdm(range(graph.vcount())):
             weis = dict((j.target, j['weight']) for j in graph.es.select(_source=0))
             weis[i] = strengths[i] / degrees[i]
             self._adjedgelist.append(weis)
 
-        self._sqsums = [sum(value * value for value in vec.values())
-                        for vec in self._adjedgelist]
+        self._sqsums = np.array([sum(value * value for value in vec.values())
+                        for vec in self._adjedgelist])
 
     def get_similarity(self, v1, v2):
         """Returns the Tanimoto coefficient of the two given vertices,
         assuming that both of them are linked to themselves."""
         vec1, vec2 = self._adjedgelist[v1], self._adjedgelist[v2]
-
+        # print (type (vec1))
         if len(vec1) > len(vec2):
             # vec1 must always be the smaller
             vec1, vec2 = vec2, vec1
 
-        numerator = sum(value * vec2.get(key, 0)
+        numerator = sum(np.array(value) * vec2.get(key, 0)
                         for key, value in vec1.items())
         return numerator / (self._sqsums[v1] + self._sqsums[v2] - numerator)
 
@@ -75,7 +80,14 @@ class TanimotoSimilarityCalculator(object):
         """Returns the Jaccard similarity between many pairs of vertices,
         assuming that all vertices are linked to themselves."""
         sim = self.get_similarity
-        return [sim(*pair) for pair in pairs]
+        print('Get similarity many')
+        # for pair in tqdm(pairs):
+        #     print (pair)
+        pairs2 = list(pairs)
+        print(len(pairs2))
+        results = [sim(*pair) for pair in tqdm(pairs2)]
+        # print(results)
+        return results
 
 
 class EdgeCluster(object):
@@ -133,7 +145,7 @@ class EdgeClustering(object):
         parameter."""
         self.clusters = [EdgeCluster(edge, (i,))
                          for i, edge in enumerate(edgelist)]
-        self.membership = range(len(edgelist))
+        self.membership = list(range(len(edgelist)))
         self.d = 0.0
 
     def lookup(self, edge):
@@ -159,8 +171,8 @@ class EdgeClustering(object):
         dc1, dc2 = cl1.partition_density(), cl2.partition_density()
 
         # Merge the smaller cluster into the larger one
+        # print('Merging clusters')
         for edge in cl2.edges:
-            # pylint: disable=unsupported-assignment-operation
             self.membership[edge] = cid1
         cl1.merge_from(cl2)
         self.clusters[cid2] = cl1
@@ -219,7 +231,7 @@ class HLC(object):
     def graph(self, graph):
         """Sets the graph being clustered."""
         self._graph = graph
-        self._edgelist = graph.get_edges()
+        self._edgelist = graph.get_edgelist()
 
     def run(self, threshold=None):
         """Runs the hierarchical link clustering algorithm on the
@@ -243,14 +255,43 @@ class HLC(object):
 
         # Select the appropriate similarity function
         if "weight" in self.graph.edge_attributes():
+            print('tannimoto pass')
             similarity = TanimotoSimilarityCalculator(self.graph).get_similarity_many
 
         # For each edge in the line graph, compute a similarity score
+        # self.edgelist = self._edgelist  # prelookup
         edgelist = self._edgelist  # prelookup
+        
         sources, targets = array('l'), array('l')
         sources.extend(0 for _ in  range(linegraph.ecount()))
         targets.extend(0 for _ in  range(linegraph.ecount()))
-        for edge in linegraph.es:
+        print('Precomputing similarity score')
+        
+        # def paralel(self, edge):
+        #     # print(len(self.edgelist))
+        #     (a, b), (c, d) =  self.edgelist[edge.source], self.edgelist[edge.target]
+        #     i = edge.index
+        #     if a == c:
+        #         sources[i] = b
+        #         targets[i] = d
+        #     elif a == d:
+        #         sources[i] = b
+        #         targets[i] = c
+        #     elif b == c:
+        #         sources[i] = a
+        #         targets[i] = d
+        #     else:  # b == d
+        #         sources[i] = a
+        #         targets[i] = c
+                
+        # start = time.time()
+        # pool = mp.Pool(processes=1000)
+        # result = [pool.apply_async(paralel, args=(self,edge,)) for edge in tqdm(linegraph.es)]
+        # pool.close()
+        # pool.join()
+        # elapsed_time_fl = (time.time() - start) 
+        # print(elapsed_time_fl)
+        for edge in tqdm(linegraph.es):
             (a, b), (c, d) = edgelist[edge.source], edgelist[edge.target]
             i = edge.index
             if a == c:
@@ -290,7 +331,8 @@ class HLC(object):
         # Process the connected components of the linegraph and build the result
         clusters = linegraph.clusters()
         result = [set() for _ in  range(len(clusters))]
-        for edge, cluster_index in zip(self._edgelist, clusters.membership):
+        print ('Process the connected components of the linegraph and build the result')
+        for edge, cluster_index in tqdm(zip(self._edgelist, clusters.membership)):
             result[cluster_index].update(edge)
         return (list(cluster) for cluster in result
                 if len(cluster) >= self.min_size)
@@ -323,7 +365,35 @@ class HLC(object):
         max_d, best_threshold, best_membership = -1, None, None
         prev_score = None
         merge_edges = clusters.merge_edges  # prelookup
-        for edge in sorted_edges:
+        
+        print ('Merge clusters, keep track of D, find maximal D')
+        
+        
+        # def edge_calc_paralel(self,edge, prev_score):
+        #     score = edge["score"]
+
+        #     if prev_score != score:
+        #         # Check whether the current D score is better than the best
+        #         # so far
+        #         if clusters.d >= self.max_d:
+        #             self.max_d, self.best_threshold = clusters.d, score
+        #             self.best_membership = list(clusters.membership)
+        #         prev_score = score
+
+        #     # Merge the clusters
+        #     merge_edges(edge.source, edge.target)
+        #     # return (best_threshold, best_membership, max_d)
+        # pool = mp.Pool()
+        
+        # # best_threshold, best_membership, max_d = [pool.apply_async(edge_calc_paralel, args=(edge,prev_score)) for edge in tqdm(sorted_edges)]
+        # result = [pool.apply_async(edge_calc_paralel, args=(edge,prev_score)) for edge in tqdm(sorted_edges)]
+        # pool.close()
+        # pool.join()
+        
+        # print (result)
+        
+        
+        for edge in tqdm(sorted_edges):
             score = edge["score"]
 
             if prev_score != score:
@@ -346,10 +416,10 @@ class HLC(object):
 
         # Build the result
         result = defaultdict(set)
-        for edge, cluster_index in zip(self._edgelist, best_membership):
+        for edge, cluster_index in tqdm(zip(self._edgelist, best_membership)):
             result[cluster_index].update(edge)
         return (list(cluster) for cluster in result.values()
-            if len(cluster) >= self.min_size)
+                if len(cluster) >= self.min_size)
 
 
 class HierarchicalLinkClusteringApp(object):
@@ -452,3 +522,15 @@ class HierarchicalLinkClusteringApp(object):
             outfile = sys.stdout
         for community in results:
             print("\t".join(graph.vs[community]["name"]), file=outfile)
+
+            
+def assign_names(result, graph):
+    for num, community in tqdm(enumerate(result), total=len(result)):
+        # print(num)
+        for a, b in itertools.combinations(community, 2):
+            try:
+                graph.es[graph.get_eid(a, b)]['community'] = num
+            except Exception:
+                pass
+    return graph
+            
